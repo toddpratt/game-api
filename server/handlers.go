@@ -128,22 +128,57 @@ func (s *Server) handlePlayers(w http.ResponseWriter, r *http.Request, g *game.G
 
 	g.AddPlayer(player)
 
+	token, err := s.generateToken(g.ID, playerID)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"player":  player,
+		"token":   token,
+		"message": "Player created successfully.",
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(player)
+	json.NewEncoder(w).Encode(response)
 }
 
-// POST /games/{gameID}/actions - Handle player actions
 func (s *Server) handleActions(w http.ResponseWriter, r *http.Request, g *game.Game) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		http.Error(w, "Missing authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+		return
+	}
+
+	claims, err := s.validateToken(parts[1])
+	if err != nil {
+		http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+
+	if claims.GameID != g.ID {
+		http.Error(w, "Token not valid for this game", http.StatusForbidden)
+		return
+	}
+
+	playerID := claims.PlayerID
+
 	var req struct {
-		PlayerID string `json:"player_id"`
-		Action   string `json:"action"` // "move", "attack"
-		Target   string `json:"target"` // location ID or player ID
+		Action string `json:"action"`
+		Target string `json:"target"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -151,17 +186,15 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request, g *game.G
 		return
 	}
 
-	// Validate player exists
-	player := g.GetPlayer(req.PlayerID)
+	player := g.GetPlayer(playerID)
 	if player == nil {
 		http.Error(w, "Player not found", http.StatusNotFound)
 		return
 	}
 
-	// Handle different actions
 	switch req.Action {
 	case "move":
-		if err := g.MovePlayer(req.PlayerID, req.Target); err != nil {
+		if err := g.MovePlayer(playerID, req.Target); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -173,7 +206,7 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request, g *game.G
 		})
 
 	case "attack":
-		if err := g.AttackPlayer(req.PlayerID, req.Target); err != nil {
+		if err := g.AttackPlayer(playerID, req.Target); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

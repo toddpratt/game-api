@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/rand"
 	"net/http"
 	"sync"
 
@@ -11,19 +12,26 @@ type Server struct {
 	games   map[string]*game.Game
 	gamesMu sync.RWMutex
 
-	router *http.ServeMux
+	router    *http.ServeMux
+	jwtSecret []byte
 }
 
 func NewServer() *Server {
 	s := &Server{
-		games:  make(map[string]*game.Game),
-		router: http.NewServeMux(),
+		games:     make(map[string]*game.Game),
+		router:    http.NewServeMux(),
+		jwtSecret: generateSecret(),
 	}
 
 	s.registerRoutes()
 	return s
 }
 
+func generateSecret() []byte {
+	secret := make([]byte, 32)
+	rand.Read(secret)
+	return secret
+}
 func (s *Server) registerRoutes() {
 	s.router.HandleFunc("/games", s.handleCreateGame)
 	s.router.HandleFunc("/games/", s.handleGameRoutes)
