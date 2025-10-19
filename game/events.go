@@ -19,4 +19,5 @@ type Event struct {
 	TargetID  string    `json:"target_id,omitempty"`
 	Message   string    `json:"message"`
 	Timestamp time.Time `json:"timestamp"`
+	Global    bool      `json:"-"`
 }

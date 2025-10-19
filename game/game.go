@@ -2,7 +2,6 @@ package game
 
 import (
 	"fmt"
-	"math/rand"
 	"sync"
 	"time"
 )
@@ -12,47 +11,76 @@ type Game struct {
 	Locations map[string]*Location
 	Players   map[string]*Player
 
-	// SSE clients
-	clients map[chan Event]bool
+	clientPlayers map[chan Event]string
 
 	Mu        sync.RWMutex
-	clientsMu sync.Mutex
+	ClientsMu sync.Mutex
 }
 
 func NewGame(id string) *Game {
 	return &Game{
-		ID:        id,
-		Locations: GenerateGraph(10),
-		Players:   make(map[string]*Player),
-		clients:   make(map[chan Event]bool),
+		ID:            id,
+		Locations:     GenerateGraph(10),
+		Players:       make(map[string]*Player),
+		clientPlayers: make(map[chan Event]string),
+		Mu:            sync.RWMutex{},
+		ClientsMu:     sync.Mutex{},
 	}
 }
 
-func (g *Game) AddPlayer(player *Player) {
-	g.Mu.Lock()
-	defer g.Mu.Unlock()
-
-	g.Players[player.ID] = player
-	g.BroadcastEvent(Event{
-		Type:     EventPlayerJoined,
-		PlayerID: player.ID,
-		Message:  player.Name + " joined the game",
-	})
+// Update AddClient to track player ID
+func (g *Game) AddClient(ch chan Event, playerID string) {
+	g.ClientsMu.Lock()
+	defer g.ClientsMu.Unlock()
+	g.clientPlayers[ch] = playerID
 }
 
+func (g *Game) RemoveClient(ch chan Event) {
+	g.ClientsMu.Lock()
+	defer g.ClientsMu.Unlock()
+	delete(g.clientPlayers, ch)
+	close(ch)
+}
+
+// Smart broadcast - only send events to players who can see them
 func (g *Game) BroadcastEvent(event Event) {
-	g.clientsMu.Lock()
-	defer g.clientsMu.Unlock()
+	g.ClientsMu.Lock()
+	defer g.ClientsMu.Unlock()
 
 	event.Timestamp = time.Now()
-	for clientChan := range g.clients {
-		select {
-		case clientChan <- event:
-		default:
-			close(clientChan)
-			delete(g.clients, clientChan)
+
+	for clientChan, playerID := range g.clientPlayers {
+		// Check if this player should see this event
+		if g.shouldPlayerSeeEvent(playerID, event) {
+			select {
+			case clientChan <- event:
+			default:
+				// Client not responsive, remove it
+				close(clientChan)
+				delete(g.clientPlayers, clientChan)
+			}
 		}
 	}
+}
+
+// Determine if a player should see an event
+func (g *Game) shouldPlayerSeeEvent(playerID string, event Event) bool {
+	// Global events are visible to everyone
+	if event.Global {
+		return true
+	}
+
+	// Get player's current location
+	g.Mu.RLock()
+	player := g.Players[playerID]
+	g.Mu.RUnlock()
+
+	if player == nil {
+		return false
+	}
+
+	// Player sees events in their current location
+	return event.Location == player.CurrentLocation
 }
 
 func (g *Game) GetPlayer(id string) *Player {
@@ -65,23 +93,27 @@ func (g *Game) GetRandomLocation() *Location {
 	g.Mu.RLock()
 	defer g.Mu.RUnlock()
 
-	if len(g.Locations) == 0 {
-		return nil // Safety check
-	}
-
-	// Random selection
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	idx := rng.Intn(len(g.Locations))
-
-	i := 0
 	for _, loc := range g.Locations {
-		if i == idx {
-			return loc
-		}
-		i++
+		return loc
 	}
-
 	return nil
+}
+
+// game/game.go - Update these methods
+
+func (g *Game) AddPlayer(player *Player) {
+	g.Mu.Lock()
+	defer g.Mu.Unlock()
+
+	g.Players[player.ID] = player
+
+	// Player joined is a GLOBAL event - everyone sees it
+	g.BroadcastEvent(Event{
+		Type:     EventPlayerJoined,
+		PlayerID: player.ID,
+		Message:  player.Name + " joined the game",
+		Global:   true, // ← Visible to all
+	})
 }
 
 func (g *Game) MovePlayer(playerID, locationID string) error {
@@ -115,11 +147,20 @@ func (g *Game) MovePlayer(playerID, locationID string) error {
 	oldLocation := player.CurrentLocation
 	player.CurrentLocation = locationID
 
+	// Broadcast departure to OLD location
 	g.BroadcastEvent(Event{
 		Type:     EventPlayerMoved,
 		PlayerID: playerID,
-		Location: locationID,
-		Message:  fmt.Sprintf("%s moved from %s to %s", player.Name, oldLocation, locationID),
+		Location: oldLocation, // ← People in old location see this
+		Message:  fmt.Sprintf("%s left the area", player.Name),
+	})
+
+	// Broadcast arrival to NEW location
+	g.BroadcastEvent(Event{
+		Type:     EventPlayerMoved,
+		PlayerID: playerID,
+		Location: locationID, // ← People in new location see this
+		Message:  fmt.Sprintf("%s arrived", player.Name),
 	})
 
 	return nil
@@ -140,14 +181,15 @@ func (g *Game) AttackPlayer(attackerID, targetID string) error {
 		return fmt.Errorf("players not in same location")
 	}
 
-	damage := 10 // Simple damage system
+	damage := 10
 	target.Health -= damage
 
+	// Attack event only visible in current location
 	g.BroadcastEvent(Event{
 		Type:     EventPlayerAttack,
 		PlayerID: attackerID,
 		TargetID: targetID,
-		Location: attacker.CurrentLocation,
+		Location: attacker.CurrentLocation, // ← Only players here see this
 		Message:  fmt.Sprintf("%s attacked %s for %d damage", attacker.Name, target.Name, damage),
 	})
 
@@ -156,22 +198,10 @@ func (g *Game) AttackPlayer(attackerID, targetID string) error {
 		g.BroadcastEvent(Event{
 			Type:     EventPlayerLeft,
 			PlayerID: targetID,
+			Location: attacker.CurrentLocation,
 			Message:  fmt.Sprintf("%s has been defeated!", target.Name),
 		})
 	}
 
 	return nil
-}
-
-func (g *Game) AddClient(ch chan Event) {
-	g.clientsMu.Lock()
-	defer g.clientsMu.Unlock()
-	g.clients[ch] = true
-}
-
-func (g *Game) RemoveClient(ch chan Event) {
-	g.clientsMu.Lock()
-	defer g.clientsMu.Unlock()
-	delete(g.clients, ch)
-	close(ch)
 }

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -229,6 +230,39 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, g *game.Game)
 		return
 	}
 
+	// Require JWT authentication
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		http.Error(w, "Missing authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+		return
+	}
+
+	claims, err := s.validateToken(parts[1])
+	if err != nil {
+		http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+
+	if claims.GameID != g.ID {
+		http.Error(w, "Token not valid for this game", http.StatusForbidden)
+		return
+	}
+
+	playerID := claims.PlayerID
+
+	// Verify player exists
+	player := g.GetPlayer(playerID)
+	if player == nil {
+		http.Error(w, "Player not found", http.StatusNotFound)
+		return
+	}
+
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -237,15 +271,27 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, g *game.Game)
 
 	// Create event channel for this client
 	eventChan := make(chan game.Event, 10)
-	g.AddClient(eventChan)
+	g.AddClient(eventChan, playerID) // Pass playerID
 	defer g.RemoveClient(eventChan)
 
-	// Send initial connection event
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+
+	// Send welcome message with current location
+	welcomeEvent := game.Event{
+		Type:      "connected",
+		Message:   fmt.Sprintf("Connected to game. You are in %s", player.CurrentLocation),
+		Location:  player.CurrentLocation,
+		Timestamp: time.Now(),
+	}
+	data, _ := json.Marshal(welcomeEvent)
+	w.Write([]byte("data: "))
+	w.Write(data)
+	w.Write([]byte("\n\n"))
+	flusher.Flush()
 
 	// Keep connection alive with periodic pings
 	ticker := time.NewTicker(30 * time.Second)
@@ -254,6 +300,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, g *game.Game)
 	for {
 		select {
 		case event := <-eventChan:
+			// Events are already filtered by BroadcastEvent
 			data, err := json.Marshal(event)
 			if err != nil {
 				continue
