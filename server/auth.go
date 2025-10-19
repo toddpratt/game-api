@@ -27,7 +27,7 @@ func (s *Server) generateToken(gameID, playerID string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(s.jwtSecret)
+	return token.SignedString(s.config.JWTSecret)
 }
 
 func (s *Server) validateToken(tokenString string) (*Claims, error) {
@@ -35,7 +35,7 @@ func (s *Server) validateToken(tokenString string) (*Claims, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
-		return s.jwtSecret, nil
+		return s.config.JWTSecret, nil
 	})
 
 	if err != nil {
@@ -49,17 +49,14 @@ func (s *Server) validateToken(tokenString string) (*Claims, error) {
 	return nil, fmt.Errorf("invalid token")
 }
 
-// Middleware to extract and validate JWT
 func (s *Server) requireAuth(gameID string, next func(w http.ResponseWriter, r *http.Request, claims *Claims)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Get token from Authorization header
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
 			http.Error(w, "Missing authorization header", http.StatusUnauthorized)
 			return
 		}
 
-		// Expect "Bearer <token>"
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
@@ -68,20 +65,17 @@ func (s *Server) requireAuth(gameID string, next func(w http.ResponseWriter, r *
 
 		tokenString := parts[1]
 
-		// Validate token
 		claims, err := s.validateToken(tokenString)
 		if err != nil {
 			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
 			return
 		}
 
-		// Verify token is for this game
 		if claims.GameID != gameID {
 			http.Error(w, "Token not valid for this game", http.StatusForbidden)
 			return
 		}
 
-		// Call the actual handler with validated claims
 		next(w, r, claims)
 	}
 }

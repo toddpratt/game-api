@@ -1,10 +1,10 @@
 package server
 
 import (
-	"crypto/rand"
 	"net/http"
 	"sync"
 
+	"game-api/config"
 	"game-api/game"
 )
 
@@ -12,29 +12,39 @@ type Server struct {
 	games   map[string]*game.Game
 	gamesMu sync.RWMutex
 
-	router    *http.ServeMux
-	jwtSecret []byte
+	router *http.ServeMux
+	config *config.Config
 }
 
-func NewServer() *Server {
+func NewServer(cfg *config.Config) *Server {
 	s := &Server{
-		games:     make(map[string]*game.Game),
-		router:    http.NewServeMux(),
-		jwtSecret: generateSecret(),
+		games:  make(map[string]*game.Game),
+		router: http.NewServeMux(),
+		config: cfg,
 	}
 
 	s.registerRoutes()
 	return s
 }
 
-func generateSecret() []byte {
-	secret := make([]byte, 32)
-	rand.Read(secret)
-	return secret
-}
 func (s *Server) registerRoutes() {
-	s.router.HandleFunc("/games", s.handleCreateGame)
-	s.router.HandleFunc("/games/", s.handleGameRoutes)
+	s.router.HandleFunc("/games", s.corsMiddleware(s.handleCreateGame))
+	s.router.HandleFunc("/games/", s.corsMiddleware(s.handleGameRoutes))
+}
+
+func (s *Server) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", s.config.AllowedOrigins)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next(w, r)
+	}
 }
 
 func (s *Server) addGame(g *game.Game) {

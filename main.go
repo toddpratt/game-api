@@ -3,14 +3,19 @@ package main
 import (
 	"log"
 
+	"game-api/config"
 	"game-api/server"
 )
 
 func main() {
-	srv := server.NewServer()
+	cfg := config.Load()
+	srv := server.NewServer(cfg)
 
-	log.Println("Starting game server on :8080")
-	if err := srv.Start(":8080"); err != nil {
+	addr := ":" + cfg.Port
+	log.Printf("Starting game server on %s", addr)
+	log.Printf("CORS allowed origins: %s", cfg.AllowedOrigins)
+
+	if err := srv.Start(addr); err != nil {
 		log.Fatal(err)
 	}
 }

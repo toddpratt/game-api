@@ -13,17 +13,21 @@ import (
 
 // POST /games - Create a new game
 func (s *Server) handleCreateGame(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodPost:
+		s.createGame(w, r)
+	case http.MethodGet:
+		s.listGames(w, r)
+	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
+}
 
-	// Generate game ID and create game
+func (s *Server) createGame(w http.ResponseWriter, r *http.Request) {
 	gameID := utils.GenerateID(8)
 	g := game.NewGame(gameID)
 	s.addGame(g)
 
-	// Return game info
 	response := map[string]interface{}{
 		"game_id":   g.ID,
 		"locations": g.Locations,
@@ -35,9 +39,40 @@ func (s *Server) handleCreateGame(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// Router for /games/{gameID}/...
+func (s *Server) listGames(w http.ResponseWriter, r *http.Request) {
+	s.gamesMu.RLock()
+	defer s.gamesMu.RUnlock()
+
+	type GameSummary struct {
+		ID            string `json:"id"`
+		PlayerCount   int    `json:"player_count"`
+		LocationCount int    `json:"location_count"`
+	}
+
+	games := make([]GameSummary, 0, len(s.games))
+
+	for _, g := range s.games {
+		g.Mu.RLock()
+		summary := GameSummary{
+			ID:            g.ID,
+			PlayerCount:   len(g.Players),
+			LocationCount: len(g.Locations),
+		}
+		g.Mu.RUnlock()
+
+		games = append(games, summary)
+	}
+
+	response := map[string]interface{}{
+		"games": games,
+		"count": len(games),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func (s *Server) handleGameRoutes(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /games/{gameID}/{action}
 	path := strings.TrimPrefix(r.URL.Path, "/games/")
 	parts := strings.Split(path, "/")
 
@@ -48,7 +83,6 @@ func (s *Server) handleGameRoutes(w http.ResponseWriter, r *http.Request) {
 
 	gameID := parts[0]
 
-	// Check if game exists
 	g := s.getGame(gameID)
 	if g == nil {
 		http.Error(w, "Game not found", http.StatusNotFound)
