@@ -229,6 +229,8 @@ func (s *Server) handlePlayers(w http.ResponseWriter, r *http.Request, g *game.G
 		Name:            req.Name,
 		CurrentLocation: startLocation.ID,
 		Health:          100,
+		Strength:        game.RollAttribute(),
+		Dexterity:       game.RollAttribute(),
 	}
 
 	g.AddPlayer(player)

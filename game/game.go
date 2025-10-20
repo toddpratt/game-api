@@ -2,6 +2,7 @@ package game
 
 import (
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -149,7 +150,38 @@ func (g *Game) AttackPlayer(attackerID, targetID string) error {
 		return fmt.Errorf("players not in same location")
 	}
 
-	damage := 10
+	// Calculate dodge chance based on target's dexterity
+	// Dexterity 3-18: gives 0-30% dodge chance (2% per point)
+	dodgeChance := (target.Dexterity - 3) * 2
+	dodgeRoll := rand.Intn(100)
+
+	if dodgeRoll < dodgeChance {
+		// Target dodged the attack
+		attackEvent = Event{
+			Type:     EventPlayerAttack,
+			PlayerID: attackerID,
+			TargetID: targetID,
+			Location: attacker.CurrentLocation,
+			Message:  fmt.Sprintf("%s attacked %s, but they dodged!", attacker.Name, target.Name),
+		}
+		g.Mu.Unlock()
+		g.BroadcastEvent(attackEvent)
+		return nil
+	}
+
+	// Calculate base damage
+	baseDamage := 10
+
+	// Strength modifier: +/- 20% based on strength difference from average (10.5)
+	// Attacker's strength increases damage, target's strength reduces it
+	attackerMod := float64(attacker.Strength-10) * 0.5 // -3.5 to +3.5
+	targetMod := float64(target.Strength-10) * 0.25    // -1.75 to +1.75 (defense is weaker)
+
+	damage := baseDamage + int(attackerMod-targetMod)
+	if damage < 1 {
+		damage = 1 // Minimum 1 damage
+	}
+
 	target.Health -= damage
 
 	attackEvent = Event{
