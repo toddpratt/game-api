@@ -11,7 +11,6 @@ import (
 	"game-api/utils"
 )
 
-// POST /games - Create a new game
 func (s *Server) handleCreateGame(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
@@ -82,7 +81,6 @@ func (s *Server) handleGameRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	gameID := parts[0]
-
 	g := s.getGame(gameID)
 	if g == nil {
 		http.Error(w, "Game not found", http.StatusNotFound)
@@ -94,7 +92,11 @@ func (s *Server) handleGameRoutes(w http.ResponseWriter, r *http.Request) {
 	} else {
 		switch parts[1] {
 		case "players":
-			s.handlePlayers(w, r, g)
+			if len(parts) == 3 && parts[2] == "me" {
+				s.handleGetPlayerContext(w, r, g) // ← New endpoint
+			} else {
+				s.handlePlayers(w, r, g)
+			}
 		case "events":
 			s.handleSSE(w, r, g)
 		case "actions":
@@ -103,6 +105,81 @@ func (s *Server) handleGameRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not found", http.StatusNotFound)
 		}
 	}
+}
+
+// GET /games/{gameID}/players/me - Get current player's context
+func (s *Server) handleGetPlayerContext(w http.ResponseWriter, r *http.Request, g *game.Game) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Require authentication
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		http.Error(w, "Missing authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+		return
+	}
+
+	claims, err := s.validateToken(parts[1])
+	if err != nil {
+		http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+
+	if claims.GameID != g.ID {
+		http.Error(w, "Token not valid for this game", http.StatusForbidden)
+		return
+	}
+
+	playerID := claims.PlayerID
+
+	g.Mu.RLock()
+	defer g.Mu.RUnlock()
+
+	player := g.Players[playerID]
+	if player == nil {
+		http.Error(w, "Player not found", http.StatusNotFound)
+		return
+	}
+
+	currentLocation := g.Locations[player.CurrentLocation]
+	if currentLocation == nil {
+		http.Error(w, "Current location not found", http.StatusInternalServerError)
+		return
+	}
+
+	// Get connected locations (full objects, not just IDs)
+	connectedLocations := make([]*game.Location, 0, len(currentLocation.Connections))
+	for _, connID := range currentLocation.Connections {
+		if loc := g.Locations[connID]; loc != nil {
+			connectedLocations = append(connectedLocations, loc)
+		}
+	}
+
+	// Get other players in the same location
+	playersHere := make([]*game.Player, 0)
+	for _, p := range g.Players {
+		if p.CurrentLocation == player.CurrentLocation && p.ID != playerID {
+			playersHere = append(playersHere, p)
+		}
+	}
+
+	response := map[string]interface{}{
+		"player":              player,
+		"current_location":    currentLocation,
+		"connected_locations": connectedLocations,
+		"players_here":        playersHere,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // GET /games/{gameID} - Get game state
