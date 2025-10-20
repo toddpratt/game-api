@@ -107,14 +107,12 @@ func (s *Server) handleGameRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET /games/{gameID}/players/me - Get current player's context
 func (s *Server) handleGetPlayerContext(w http.ResponseWriter, r *http.Request, g *game.Game) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Require authentication
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		http.Error(w, "Missing authorization header", http.StatusUnauthorized)
@@ -155,7 +153,6 @@ func (s *Server) handleGetPlayerContext(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Get connected locations (full objects, not just IDs)
 	connectedLocations := make([]*game.Location, 0, len(currentLocation.Connections))
 	for _, connID := range currentLocation.Connections {
 		if loc := g.Locations[connID]; loc != nil {
@@ -163,7 +160,6 @@ func (s *Server) handleGetPlayerContext(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	// Get other players in the same location
 	playersHere := make([]*game.Player, 0)
 	for _, p := range g.Players {
 		if p.CurrentLocation == player.CurrentLocation && p.ID != playerID {
@@ -182,7 +178,6 @@ func (s *Server) handleGetPlayerContext(w http.ResponseWriter, r *http.Request, 
 	json.NewEncoder(w).Encode(response)
 }
 
-// GET /games/{gameID} - Get game state
 func (s *Server) handleGetGame(w http.ResponseWriter, r *http.Request, g *game.Game) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -202,7 +197,6 @@ func (s *Server) handleGetGame(w http.ResponseWriter, r *http.Request, g *game.G
 	json.NewEncoder(w).Encode(response)
 }
 
-// POST /games/{gameID}/players - Add a player
 func (s *Server) handlePlayers(w http.ResponseWriter, r *http.Request, g *game.Game) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -223,7 +217,6 @@ func (s *Server) handlePlayers(w http.ResponseWriter, r *http.Request, g *game.G
 		return
 	}
 
-	// Create player at a random starting location
 	playerID := utils.GenerateID(6)
 	startLocation := g.GetRandomLocation()
 	if startLocation == nil {
@@ -334,14 +327,12 @@ func (s *Server) handleActions(w http.ResponseWriter, r *http.Request, g *game.G
 	}
 }
 
-// GET /games/{gameID}/events - SSE endpoint
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, g *game.Game) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Require JWT authentication
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		http.Error(w, "Missing authorization header", http.StatusUnauthorized)
@@ -367,20 +358,17 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, g *game.Game)
 
 	playerID := claims.PlayerID
 
-	// Verify player exists
 	player := g.GetPlayer(playerID)
 	if player == nil {
 		http.Error(w, "Player not found", http.StatusNotFound)
 		return
 	}
 
-	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	// Create event channel for this client
 	eventChan := make(chan game.Event, 10)
 	g.AddClient(eventChan, playerID) // Pass playerID
 	defer g.RemoveClient(eventChan)
@@ -391,7 +379,6 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, g *game.Game)
 		return
 	}
 
-	// Send welcome message with current location
 	welcomeEvent := game.Event{
 		Type:      "connected",
 		Message:   fmt.Sprintf("Connected to game. You are in %s", player.CurrentLocation),
@@ -404,14 +391,12 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, g *game.Game)
 	w.Write([]byte("\n\n"))
 	flusher.Flush()
 
-	// Keep connection alive with periodic pings
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case event := <-eventChan:
-			// Events are already filtered by BroadcastEvent
 			data, err := json.Marshal(event)
 			if err != nil {
 				continue
@@ -423,7 +408,6 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, g *game.Game)
 			flusher.Flush()
 
 		case <-ticker.C:
-			// Send keepalive comment
 			w.Write([]byte(": keepalive\n\n"))
 			flusher.Flush()
 
